@@ -1,5 +1,6 @@
 locals {
   repository_url = "ghcr.io/jimmysawczuk/sun-api"
+  domain         = "my.domain.name"
 }
 
 # We need a cluster in which to put our service.
@@ -178,6 +179,11 @@ resource "aws_alb_listener" "sun_api_https" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.sun_api.arn
   }
+
+  depends_on = [
+    aws_acm_certificate_validation.sun_api
+  ]
+
 }
 
 output "alb_url" {
@@ -185,10 +191,37 @@ output "alb_url" {
 }
 
 resource "aws_acm_certificate" "sun_api" {
-  domain_name       = "sun-api.jimmysawczuk.net"
+  domain_name       = local.domain
   validation_method = "DNS"
 }
 
 output "domain_validations" {
   value = aws_acm_certificate.sun_api.domain_validation_options
+}
+
+data "aws_route53_zone" "zone" {
+  name = local.domain
+  private_zone = false
+}
+
+resource "aws_route53_record" "example" {
+  for_each = {
+    for dvo in aws_acm_certificate.sun_api.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = data.aws_route53_zone.zone.zone_id
+}
+
+resource "aws_acm_certificate_validation" "sun_api" {
+  certificate_arn = aws_acm_certificate.sun_api.arn
+  validation_record_fqdns = [for record in aws_route53_record.example : record.fqdn]
 }
